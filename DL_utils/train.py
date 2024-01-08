@@ -11,13 +11,15 @@ from torchvision import transforms
 
 #dataset
 from dataset import CustomDataset
-from torch.utils.data import DataLoader 
+from torch.utils.data import DataLoader
+
+#model 
 import torchvision.models as models
-import custom_models as custom_models
+from custom_models import *
 
 #metric
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
-import torchmetrics.functional as tmf
+from sklearn.metrics import recall_score, f1_score, accuracy_score
+
 
 #numeric
 import numpy as np
@@ -29,6 +31,7 @@ import matplotlib.pyplot as plt
 #system 
 from tqdm import tqdm
 import os 
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 import wandb
 
 #parser
@@ -53,19 +56,27 @@ class Train(nn.Module):
         ########################## Data set & Data Loader ##############################
         # Data set & Data Loader
         train_transform = transforms.Compose([
+            transforms.Resize((224, 224), antialias= True), # 혹은 모델에 맞는 다른 사이즈로 조정
             transforms.ToTensor(),
-            transforms.Resize((224,224), antialias=True),
-            transforms.Grayscale(num_output_channels=3),
-            transforms.RandomHorizontalFlip(p=1),
-            transforms.RandomRotation(degrees=30),
-            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
-            transforms.ColorJitter(contrast=2),
+            transforms.RandomApply([
+                transforms.RandomRotation(degrees=15),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomVerticalFlip(p=0.5),
+                transforms.RandomResizedCrop(size=224, scale=(0.8, 1.0), ratio=(0.75, 1.33), antialias= True),
+                transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2)
+            ], p=0.7),
         ])
 
+
+
         valid_transform = transforms.Compose([
-            transforms.ToTensor(),
             transforms.Resize((224,224), antialias=True),
-            transforms.Grayscale(num_output_channels=3)
+            transforms.ToTensor(),
+            # transforms.Resize((299,299), antialias=True),
+            transforms.Grayscale(num_output_channels=3),
+            # transforms.Normalize((0.5), (0.5)),
+            
         ])
 
         train_dataset = CustomDataset(root_dir = 'data/train', transform= train_transform)
@@ -75,15 +86,15 @@ class Train(nn.Module):
                                     dataset = train_dataset,
                                     batch_size = args.ts_batch_size,
                                     shuffle = True,
-                                    num_workers= 4,
-                                    pin_memory= False
+                                    num_workers= 8,
+                                    pin_memory= True,
                                     )
         self.valid_loader = DataLoader(
                                     dataset = valid_dataset,
                                     batch_size = args.vs_batch_size,
                                     shuffle = False,
                                     num_workers=2,
-                                    pin_memory= False
+                                    pin_memory= True,
                                     )
         
         ######################################### Wan DB #########################################
@@ -91,7 +102,7 @@ class Train(nn.Module):
         self.w = args.wandb
         if args.wandb == 'yes':
             wandb.init(
-                project = 'MobileNet_v2',
+                project = 'PCOS', 
                 entity = 'dablro1232',
                 notes = 'baseline',
                 config = args.__dict__,
@@ -118,7 +129,7 @@ class Train(nn.Module):
             print(f"Previous model : {PATH} | \033[41mstatus : Pretrained Update\033[0m")
             
             model_file = torch.load(PATH)
-            self.model = custom_models.AutoEncoder(input_dim = 28*28, hidden_dim1 =32, hidden_dim2= 64).to(self.device)
+            # self.model = custom_models.AutoEncoder(input_dim = 28*28, hidden_dim1 =32, hidden_dim2= 64).to(self.device)
             
             self.model.load_state_dict(model_file['model_state_dict'])
                 
@@ -129,7 +140,7 @@ class Train(nn.Module):
                 self.epoch = 0
             self.lr = model_file['learning_rate']
             self.loss = model_file['loss'].to(self.device)
-            self.optimizer = optim.Adam(self.model.parameters(), lr = self.lr)
+            self.optimizer = optim.AdamW(self.model.parameters(), lr = self.lr)
             self.optimizer.load_state_dict(model_file['optimizer_state_dict'])
             self.scheduler = optim.lr_scheduler.LambdaLR(optimizer = self.optimizer, lr_lambda=lambda epoch: 0.95 ** self.epochs)
             self.name = model_file['model']
@@ -140,118 +151,160 @@ class Train(nn.Module):
             self.vs_batch = args.vs_batch_size
             
         else:
-            self.model = models.mobilenet_v2(pretrained = True)
-            self.model.classifier[-1] = nn.Linear(1280, 3) #mobilenet_v2  #3개의 채널에 대해 해줌
+            self.model = pretrained_vgg16_binary()
             self.model.to(self.device)
-            # self.model = custom_models.AutoEncoder(input_dim = 28*28, hidden_dim1 =32, hidden_dim2= 64).to(self.device)
+
             print(f"Training Model : {args.model} | status : \033[42mNEW\033[0m")
 
             ############################# Hyper Parameter Setting ################################
-            self.loss = nn.CrossEntropyLoss().to(self.device)
-            self.optimizer = optim.Adam(self.model.parameters(), lr = args.learning_rate)
-            self.scheduler = optim.lr_scheduler.LambdaLR(optimizer = self.optimizer, lr_lambda=lambda epoch: 0.95)
+            self.loss = nn.BCEWithLogitsLoss().to(self.device)
+            self.optimizer = optim.AdamW(self.model.parameters(), lr = args.learning_rate)
+            self.scheduler = optim.lr_scheduler.LambdaLR(optimizer = self.optimizer,
+                                                        lr_lambda=lambda epoch: 0.95 ** epoch,
+                                                        last_epoch = -1,
+                                                        verbose= True)
             self.epochs = args.epochs
             self.epoch = 0
             self.ve = args.valid_epoch 
             self.lr = args.learning_rate
             self.name = name 
-            self.t_loss_li = []
-            self.v_loss_li = []
             self.ts_batch = args.ts_batch_size
             self.vs_batch = args.vs_batch_size
             self.version = args.version
+            self.model_name = args.model    
+        
             ############################# Hyper Parameter Setting ################################
+            self.early_stopping_epochs, self.early_stop_cnt = 5, 0
+            self.best_loss = float('inf')
             
         ############################### Metrics Setting########################################
-        self.accuracy = accuracy_score
-        self.precsion = precision_score
-        self.recall = recall_score
-        self.f1 = f1_score
-        self.roc_curve = roc_curve
+        self.metrics = {
+            'train_loss' : [],
+            'valid_loss' : [],
+            'train_accuracy' : [],
+            'train_f1' : [],
+            'train_recall' : [],
+            'valid_accuracy' : [],
+            'valid_f1' : [],
+            'valid_recall' : [],
+        }
+
         ############################### Metrics Setting########################################
         
         # Training 
         print("\033[41mFinished Initalization\033[0m")
         print("\033[41mStart Training\033[0m")
-        
+    
     def fit(self):
-        train_loss_li = self.t_loss_li
-        valid_loss_li = self.v_loss_li
-        
         for epoch in tqdm(range(self.epoch, self.epochs)):
-            ################################# train ################################# 
-            self.model.train() 
-            train_losses = 0. 
+            train_losses, valid_losses = 0., 0.
+            train_target, train_pred, valid_target, valid_pred = [], [], [], [] 
             
-            predicted_probs = []
-            true_labels = []
-            for _ , (inputs, labels) in enumerate(self.train_loader):
+            self.model.train()
+            for _, (inputs, labels) in tqdm(enumerate(self.train_loader)):
                 self.optimizer.zero_grad()
-                
-                inputs, labels = inputs.to(self.device), labels.long().view(-1).to(self.device)
-                # Forward
+                inputs, labels = inputs.to(self.device), labels.float().to(self.device)
                 outputs = self.model(inputs)
-                # softmax거쳐서 클래스 확률로 변환
-                outputs = F.softmax(outputs, dim = 1)
+                
                 train_loss = self.loss(outputs, labels)
-                # backward & optimizer 
                 train_loss.backward()
-                self.optimizer.step() 
-                
+                self.optimizer.step()
                 train_losses += train_loss.item()
-
-                # metrics 뽑고 싶을떄만 보기 # 각 행에서 가장 큰 값의 인덱스를 예측 클래스로 선택
-                # predicted_probs.extend(torch.argmax(outputs, dim = 1).cpu().numpy())
-                # true_labels.extend(labels.cpu().numpy())
-                # print(predicted_probs)
-                # print(true_labels)
                 
-            train_loss_li.append(train_losses / len(labels))
+                # 예측 값을 이진 레이블로 변환
+                pred = (F.sigmoid(outputs) >0.5).float()
+                train_target.extend(labels.detach().cpu().numpy())
+                train_pred.extend(pred.detach().cpu().numpy())
+
+            self.metrics['train_loss'].append(train_losses/len(self.train_loader))
+            self.metrics['train_accuracy'].append(accuracy_score(train_target, train_pred))
+            self.metrics['train_f1'].append(f1_score(train_target, train_pred))
+            self.metrics['train_recall'].append(recall_score(train_target, train_pred))
+            
             self.scheduler.step()
+            lr = self.optimizer.param_groups[0]["lr"]
+                
             if self.w == "yes":
                 wandb.log({
-                    "learning_rate" : self.lr,
-                    "training_loss" : train_losses / len(labels),
+                    "Learning_Rate" : lr,
+                    "train_LOSS" : self.metrics['train_loss'][-1],
+                    "train_ACC" : self.metrics['train_accuracy'][-1],
+                    "train_F1Score" : self.metrics['train_f1'][-1],
+                    "train_RECALL" : self.metrics['train_recall'][-1],
                 }, step = epoch)
-            
+                
         
             ################################# valid #################################
-            self.model.eval()
-            if epoch % 1 == 0: 
-                valid_losses = 0.
-                for _ , (inputs, labels) in enumerate(self.valid_loader):
-                    inputs, labels = inputs.to(self.device), labels.long().view(-1).to(self.device)
-                    
-                    # Forward
-                    outputs = self.model(inputs)
-                    outputs = F.softmax(outputs, dim = 1)
-                    
-                    valid_loss = self.loss(outputs, labels)
-                    valid_losses += valid_loss.item()
-                valid_loss_li.append(valid_losses / len(labels))
-                print(f"\033[42mEpoch [{epoch}/{self.epochs}], Train Loss : {(train_losses/self.ts_batch):.4f}, Valid Loss : {(valid_losses/self.vs_batch):.4f}\033[0m")
+            with torch.no_grad():
+                self.model.eval()
+                if epoch % 1 == 0: 
+                    for _ , (inputs, labels) in enumerate(self.valid_loader):
+                        inputs, labels = inputs.to(self.device), labels.float().to(self.device)
+                        outputs = self.model(inputs)
+                        
+                        valid_loss = self.loss(outputs, labels)
+                        valid_losses += valid_loss.item()
 
-                ## Display to Wandb for validation loss
-                if self.w == "yes":
-                    wandb.log({
-                        "validation_loss" : valid_losses / len(labels),
-                    }, step = epoch)
-                
-                ## model save
+                        # 예측 값을 이진 레이블로 변환
+                        pred = (F.sigmoid(outputs) > 0.5).float()
+                        valid_target.extend(labels.detach().cpu().numpy())
+                        valid_pred.extend(pred.detach().cpu().numpy())
+                        
+                    self.metrics['valid_loss'].append(valid_losses/len(self.valid_loader))
+                    self.metrics['valid_accuracy'].append(accuracy_score(valid_target, valid_pred))
+                    self.metrics['valid_f1'].append(f1_score(valid_target, valid_pred))
+                    self.metrics['valid_recall'].append(recall_score(valid_target, valid_pred))
+                    
+                    
+            print("#"*100)    
+            print(f"LOSS : {self.metrics['train_loss'][-1]} | {self.metrics['valid_loss'][-1]}\n ACC : {self.metrics['train_accuracy'][-1]} | {self.metrics['valid_accuracy'][-1]}\n F1 : {self.metrics['train_f1'][-1]} | {self.metrics['valid_f1'][-1]}\n RECALL : {self.metrics['train_recall'][-1]} | {self.metrics['valid_recall'][-1]}")
+            print("#"*100)
+                    
+            ## Display to Wandb for validation loss
+            if self.w == "yes":
+                wandb.log({
+                    "valid_LOSS" : self.metrics['valid_loss'][-1],
+                    "valid_ACC" : self.metrics['valid_accuracy'][-1],
+                    "valid_F1Score" : self.metrics['valid_f1'][-1],
+                    "valid_RECALL" : self.metrics['valid_recall'][-1],
+                }, step = epoch)
+            
+            # 조기 종료 조건 확인
+            if self.early_stop_cnt >= self.early_stopping_epochs:
+                print(f"Early Stops!!! : {epoch}/{self.epochs}")
                 torch.save({
-                    "model" : str(self.name) + f"{self.version}_{epoch}",
+                    "model" : f"{self.name}" + f"{self.version}_{epoch}",
                     "epoch" : epoch,
                     "epochs" : self.epochs,
                     "model_state_dict" : self.model.state_dict(),
                     "optimizer_state_dict" : self.optimizer.state_dict(),
-                    "learning_rate" : self.lr,
+                    "learning_rate" : lr,
                     "loss" : self.loss,
-                    "t_loss" : train_loss_li,
-                    "v_loss" : valid_loss_li,
-                    "description" : f"{self.name} training status : {epoch}/{self.epochs}"
+                    "metric" : self.metrics,
+                    "description" : f"Training status : {epoch}/{self.epochs}"
                 },
                 self.model_save_path)
-        
+                
+                print(f"SAVE MODEL PATH : {self.model_save_path}")
+                break
+
+            elif self.metrics['valid_recall'][-1] >= np.array(self.metrics['valid_recall']).max():
+                torch.save({
+                    "model" : f"{self.name}" + f"{self.version}_{epoch}",
+                    "epoch" : epoch,
+                    "epochs" : self.epochs,
+                    "model_state_dict" : self.model.state_dict(),
+                    "optimizer_state_dict" : self.optimizer.state_dict(),
+                    "learning_rate" : lr,
+                    "loss" : self.loss,
+                    "metric" : self.metrics,
+                    "description" : f"Training status : {epoch}/{self.epochs}"
+                },
+                self.model_save_path)
+                
+                print(f"SAVE MODEL PATH : {self.model_save_path}")
+                    
+
         print("="*100)
         print(f"\033[41mFinished Training\033[0m | Save model PATH : {self.model_save_path}")
         if self.w == "yes":

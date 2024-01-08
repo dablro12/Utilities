@@ -1,5 +1,8 @@
 import torch 
 import torch.nn as nn
+from torchvision import models
+from torch.nn import functional as F 
+
 
 class FCN(nn.Module):
     # input = channels * width * height  
@@ -328,3 +331,71 @@ class AutoEncoder(nn.Module):
     ## hidden state 값 = latent vector 확인 
     def hidden_state(self, x): 
         return self.encoder(x)
+    
+
+class pretrained_vgg16_binary(nn.Module):
+    def __init__(self):
+        super(pretrained_vgg16_binary, self).__init__()
+        self.base_model = models.vgg16(weights = models.VGG16_Weights)
+        # vgg16 마지막 분류기 부분을 바이너리 분류에 맞게 변경
+        self.base_model.classifier[-1] = nn.Linear(4096, 1)
+        
+    def forward(self, x):
+        out = self.base_model(x).view(-1)
+        return out  #Sigmoid 처리
+    
+    
+
+class pretrained_mobilenet_binary(nn.Module):
+    def __init__(self):
+        super(pretrained_mobilenet_binary, self).__init__()
+        self.base_model = models.mobilenet_v2(weights = models.MobileNet_V2_Weights)
+        # vgg16 마지막 분류기 부분을 바이너리 분류에 맞게 변경
+        self.base_model.classifier[-1] = nn.Linear(1280, 1)
+        
+    def forward(self, x):
+        return self.base_model(x).view(-1)
+    
+
+class pretrained_resnet18_binary(nn.Module):
+    def __init__(self):
+        super(pretrained_resnet18_binary, self).__init__()
+        self.base_model = models.resnet18(weights = models.ResNet18_Weights)
+        # vgg16 마지막 분류기 부분을 바이너리 분류에 맞게 변경
+        self.base_model.fc = nn.Linear(512, 1)
+        
+    def forward(self, x):
+        return self.base_model(x).view(-1)
+
+
+class pretrained_efficient_binary(nn.Module):
+    def __init__(self):
+        super(pretrained_efficient_binary, self).__init__()
+        self.base_model = models.efficientnet(weights = models.EfficientNet)
+        # vgg16 마지막 분류기 부분을 바이너리 분류에 맞게 변경
+        self.base_model.classifier[-1] = nn.Linear(1280, 1)
+        
+    def forward(self, x):
+        return self.base_model(x).view(-1)
+
+
+class pretrained_convnext_binary(nn.Module):
+    def __init__(self):
+        super(pretrained_convnext_binary, self).__init__()
+        self.base_model = models.convnext(weights = models.ConvNeXt)
+        # vgg16 마지막 분류기 부분을 바이너리 분류에 맞게 변경
+        self.base_model.classifier[-1] = nn.Linear(1280, 1)
+        
+    def forward(self, x):
+        return self.base_model(x).view(-1)
+    
+class pretrained_swin_binary(nn.Module):
+    def __init__(self):
+        super(pretrained_swin_binary, self).__init__()
+        self.base_model = models.swin_v2_b(weights = models.Swin_V2_B_Weights)
+        # vgg16 마지막 분류기 부분을 바이너리 분류에 맞게 변경
+        self.base_model.head = nn.Linear(1024, 1)
+        
+    def forward(self, x):
+        return self.base_model(x).view(-1)
+

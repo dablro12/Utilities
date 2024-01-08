@@ -17,9 +17,9 @@ class CustomDataset(Dataset):
             if os.path.isdir(label_dir):
                 for filename in os.listdir(label_dir):
                     file_path = os.path.join(label_dir, filename)
-                    self.labels.append(int(label))
+                    self.labels.append(float(label))
                     self.image_paths.append(file_path)
-                    
+                
         
     def __len__(self):
         return len(self.labels) 
@@ -33,7 +33,7 @@ class CustomDataset(Dataset):
         image = Image.open(image_path).convert('RGB')
         
         # 위아래 제외하고 crop 해놓기 -> 원본과 같은사이즈로
-        crop_img = image.crop((0, 150, image.width, image.height - 50))
+        crop_img = image.crop((0, 120, image.width, image.height - 50))
         image = Image.new("RGB", image.size, (0,0,0))
         image.paste(crop_img, (0,150)) 
         
